@@ -63,8 +63,9 @@ class Train(CMD):
         self.model = Model(args).load_pretrained(self.CHAR.embed)
         print(f"{self.model}\n")
         self.model = self.model.to(args.device)
+        self.dp_model = self.model
         if torch.cuda.device_count() > 1:
-            self.model = nn.DataParallel(self.model)
+            self.dp_model = nn.DataParallel(self.model)
         self.optimizer = Adam(self.model.parameters(),
                               args.lr,
                               (args.mu, args.nu),

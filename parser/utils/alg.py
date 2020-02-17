@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-from parser.utils.fn import stripe
+from parser.utils.fn import stripe, multi_dim_max
 
 import torch
 import torch.autograd as autograd
@@ -47,57 +47,144 @@ def kmeans(x, k):
 
 
 @torch.enable_grad()
-def crf(scores, mask, target=None, marg=False):
+def crf(scores, transitions, start_transitions, mask, target=None, marg=False):
     lens = mask[:, 0].sum(-1)
     total = lens.sum()
-    batch_size, seq_len, _ = scores.shape
-    training = scores.requires_grad
+    batch_size, seq_len, seq_len, n_labels = scores.shape
+    mask = mask.view(batch_size, seq_len, seq_len, 1).expand_as(scores)
     # always enable the gradient computation of scores
     # in order for the computation of marginal probs
-    s = inside(scores.requires_grad_(), mask)
-    logZ = s[0].gather(0, lens.unsqueeze(0)).sum()
+    s = inside(scores.requires_grad_(), transitions,
+               start_transitions, mask)
+    lens = lens.view(1, 1, batch_size).expand([-1, n_labels, -1])
+    logZ = s[0].gather(0, lens).logsumexp(1).sum()
     # marginal probs are used for decoding, and can be computed by
     # combining the inside algorithm and autograd mechanism
     # instead of the entire inside-outside process
     probs = scores
     if marg:
-        probs, = autograd.grad(logZ, scores, retain_graph=training)
+        probs, = autograd.grad(
+            logZ, scores, retain_graph=scores.requires_grad)
     if target is None:
-        return probs
+        return None, probs
 
-    loss = (logZ - scores[mask & target].sum()) / total
+    mask = target & mask
+    s = inside(scores.requires_grad_(), transitions,
+               start_transitions, mask)
+    score = s[0].gather(0, lens).logsumexp(1).sum()
+    loss = (logZ - score) / total
     return loss, probs
 
 
-def inside(scores, mask):
-    batch_size, seq_len, _ = scores.shape
-    # [seq_len, seq_len, batch_size]
-    scores, mask = scores.permute(1, 2, 0), mask.permute(1, 2, 0)
+def inside(scores, transitions, start_transitions, mask):
+    lens = mask[:, 0].sum(-1)
+    batch_size, seq_len, seq_len, n_labels = scores.shape
+    # [seq_len, seq_len, n_labels, batch_size]
+    scores = scores.permute(1, 2, 3, 0)
+    # [seq_len, seq_len, n_labels, batch_size]
+    mask = mask.permute(1, 2, 3, 0)
+    scores = scores.masked_fill(~mask, -1e32)
+    mask = mask.any(2)
     s = torch.full_like(scores, float('-inf'))
+
+    start_transitions = start_transitions.view(1, 1, n_labels)
+    transitions = transitions.view(1, 1,
+                                   n_labels, n_labels, n_labels)
 
     for w in range(1, seq_len):
         # n denotes the number of spans to iterate,
         # from span (0, w) to span (n, n+w) given width w
         n = seq_len - w
         # diag_mask is used for ignoring the excess of each sentence
-        # [batch_size, n]
         diag_mask = mask.diagonal(w)
-
+        # [batch_size, n, n_labels]
+        emit_scores = scores.diagonal(w).permute(1, 2, 0)[diag_mask]
+        diag_s = s.diagonal(w).permute(1, 2, 0)
         if w == 1:
-            s.diagonal(w)[diag_mask] = scores.diagonal(w)[diag_mask]
+            diag_s[diag_mask] = emit_scores + start_transitions
             continue
-        # [n, w, batch_size]
-        s_span = stripe(s, n, w-1, (0, 1)) + stripe(s, n, w-1, (1, w), 0)
-        # [batch_size, n, w]
-        s_span = s_span.permute(2, 0, 1)
-        s_span = s_span[diag_mask].logsumexp(-1)
-        s.diagonal(w)[diag_mask] = s_span + scores.diagonal(w)[diag_mask]
-
+        # [batch_size, n, w-1, n_labels, n_labels, n_labels]
+        emit_scores = emit_scores.view(-1, 1, 1, 1, n_labels)
+        s_left = stripe(s, n, w-1, (0, 1)).permute(3, 0, 1, 2).contiguous()
+        s_left = s_left.view(batch_size,
+                             n, w-1,
+                             n_labels, 1, 1)[diag_mask]
+        s_right = stripe(s, n, w-1, (1, w), 0).permute(3, 0, 1, 2).contiguous()
+        s_right = s_right.view(batch_size,
+                               n, w-1,
+                               1, n_labels, 1)[diag_mask]
+        # [*, w-1, n_labels, n_labels, n_labels]
+        inner = s_left + s_right + transitions + emit_scores
+        # [*, n, n_labels]
+        inner = inner.logsumexp([1, 2, 3])
+        diag_s[diag_mask] = inner
     return s
 
 
-def cky(scores, mask):
+def cky(scores, transitions, start_transitions, mask):
     lens = mask[:, 0].sum(-1)
+    batch_size, seq_len, seq_len, n_labels = scores.shape
+    # [seq_len, seq_len, n_labels, batch_size]
+    scores = scores.permute(1, 2, 3, 0)
+    s = torch.zeros_like(scores)
+    bp = scores.new_zeros(seq_len, seq_len, n_labels, batch_size, 3).long()
+
+    start_transitions = start_transitions.view(n_labels, 1, 1)
+    transitions = transitions.view(1, 1,
+                                   n_labels, n_labels, n_labels,
+                                   1)
+
+    for w in range(1, seq_len):
+        n = seq_len - w
+        starts = bp.new_tensor(range(n)).unsqueeze(0)
+        # [n_labels, batch_size, n]
+        emit_scores = scores.diagonal(w)
+
+        if w == 1:
+            # [n_labels, batch_size, n]
+            s.diagonal(w).copy_(emit_scores + start_transitions)
+            continue
+        # [n, w-1, n_labels, n_labels, n_labels, batch_size]
+        emit_scores = emit_scores.permute(2, 0, 1).contiguous().view(n, 1,
+                                                                     1, 1, n_labels,
+                                                                     batch_size)
+        s_left = stripe(s, n, w-1, (0, 1)).view(n, w-1,
+                                                n_labels, 1, 1,
+                                                batch_size)
+        s_right = stripe(s, n, w-1, (1, w), 0).view(n, w-1,
+                                                    1, n_labels, 1,
+                                                    batch_size)
+        inner = s_left + s_right + transitions + emit_scores
+        # [n_labels, batch_size, n, w-1, n_labels, n_labels]
+        inner = inner.permute(4, 5, 0, 1, 2, 3)
+        # [n_labels, batch_size, n]
+        inner, idx = multi_dim_max(inner, [3, 4, 5])
+        idx[..., 0] = idx[..., 0] + starts + 1
+        # [n_labels, batch_size, n, 3]
+        idx = idx.permute(0, 1, 3, 2)
+        s.diagonal(w).copy_(inner)
+        # [n_labels, batch_size, 3, n]
+        bp.diagonal(w).copy_(idx)
+
+    def backtrack(bp, label, i, j):
+        if j == i + 1:
+            return [(i, j, label)]
+        split, llabel, rlabel = bp[i][j][label]
+        ltree = backtrack(bp, llabel, i, split)
+        rtree = backtrack(bp, rlabel, split, j)
+        return [(i, j, label)] + ltree + rtree
+
+    labels = s.permute(3, 0, 1, 2).argmax(-1)
+    bp = bp.permute(3, 0, 1, 2, 4).tolist()
+    trees = [backtrack(bp[i], labels[i, 0, length], 0, length)
+             for i, length in enumerate(lens.tolist())]
+
+    return trees
+
+
+def simple_cky(scores, mask):
+    lens = mask[:, 0].sum(-1)
+    scores = scores.sum(-1)
     scores = scores.permute(1, 2, 0)
     seq_len, seq_len, batch_size = scores.shape
     s = scores.new_zeros(seq_len, seq_len, batch_size)
@@ -132,3 +219,29 @@ def cky(scores, mask):
              for i, length in enumerate(lens.tolist())]
 
     return trees
+
+
+def heatmap(corr, name='matrix'):
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+
+    sns.set(style="white")
+
+    # Set up the matplotlib figure
+    f, ax = plt.subplots(nrows=2, ncols=2, figsize=(40, 40))
+
+    # Generate a custom diverging colormap
+    # cmap = sns.diverging_palette(220, 10, as_cmap=True)
+
+    cmap = "RdBu"
+    for i in range(4):
+        # Draw the heatmap with the mask and correct aspect ratio
+        sns.heatmap(corr[..., i], cmap=cmap, center=0, ax=ax[i//2][i % 2],
+                    square=True, linewidths=.5,
+                    xticklabels=False, yticklabels=False,
+                    cbar=False, vmax=1.5, vmin=-1.5)
+    plt.savefig(f'{name}.png')
+    plt.close()
+
+    # heatmap(s_span[0].cpu().detach(),
+    #     torch.ones(seq_len-1,seq_len-1).triu_(1).eq(0))

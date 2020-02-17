@@ -132,6 +132,22 @@ class ChartField(Field):
                           for i, j, label in self.preprocess(sequence))
 
         self.vocab = Vocab(counter, min_freq, self.specials, self.unk_index)
+        self.pos_label = {"NN", "VV", "PU", "AD", "NR", "PN", "P", "CD", "M", "VA", "DEG", "JJ", "DEC", "VC", "NT", "SP", "DT", "LC",
+                          "CC", "AS", "VE", "IJ", "OD", "CS", "MSP", "BA", "DEV", "SB", "ETC", "DER", "LB", "IC", "NOI", "URL", "EM", "ON", "FW", "X"}
+
+    def label_cluster(self, label):
+        if label.endswith("|<>"):
+            label = label[:-3].split("+")[-1]
+            if label in self.pos_label:
+                return 1
+            else:
+                return 3
+        else:
+            label = label.split("+")[-1]
+            if label in self.pos_label:
+                return 2
+            else:
+                return 4
 
     def transform(self, sequences):
         sequences = [self.preprocess(sequence) for sequence in sequences]
@@ -139,10 +155,10 @@ class ChartField(Field):
 
         for sequence in sequences:
             seq_len = sequence[0][1] + 1
-            span_chart = torch.full((seq_len, seq_len), self.pad_index).bool()
+            span_chart = torch.full((seq_len, seq_len), self.pad_index).long()
             label_chart = torch.full((seq_len, seq_len), self.pad_index).long()
             for i, j, label in sequence:
-                span_chart[i, j] = 1
+                span_chart[i, j] = self.label_cluster(label)
                 label_chart[i, j] = self.vocab[label]
             spans.append(span_chart)
             labels.append(label_chart)

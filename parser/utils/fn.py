@@ -3,6 +3,7 @@
 import unicodedata
 
 from nltk.tree import Tree
+import torch
 
 
 def ispunct(token):
@@ -89,6 +90,28 @@ def binarize(tree):
     return tree
 
 
+def multi_dim_max(tensor, dims):
+    value_tensor = None
+    index_tensor = None
+    for dim in dims:
+        if value_tensor is not None:
+            assert index_tensor is not None
+            val, idx = value_tensor.max(dim, keepdim=True)
+            expand_shape = index_tensor.shape
+            expand_shape = [-1] * (len(expand_shape) - 1) + [expand_shape[-1]]
+            idx = idx.unsqueeze(-1)
+            index_tensor = index_tensor.gather(dim, idx.expand(expand_shape))
+            index_tensor = torch.cat([index_tensor, idx], -1)
+        else:
+            val, idx = tensor.max(dim, keepdim=True)
+            index_tensor = idx.unsqueeze(-1)
+        value_tensor = val
+    for i, dim in enumerate(sorted(dims)):
+        value_tensor = value_tensor.squeeze(dim - i)
+        index_tensor = index_tensor.squeeze(dim - i)
+    return value_tensor, index_tensor
+
+
 def decompose(tree):
     tree = tree.copy(True)
     pos = set(list(zip(*tree.pos()))[1])
@@ -113,7 +136,7 @@ def compose(tree):
         if isinstance(node, Tree):
             nodes.extend([child for child in node])
             for i, child in enumerate(node):
-                if isinstance(child, Tree) and any([isinstance(grand[0], str) for grand in child]):
+                if isinstance(child, Tree) and all([isinstance(grand[0], str) for grand in child]):
                     node[i] = Tree(child.label(), ["".join(child.leaves())])
 
     return tree

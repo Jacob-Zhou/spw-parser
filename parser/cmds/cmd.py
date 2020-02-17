@@ -69,7 +69,7 @@ class CMD(object):
         args.update({
             'n_chars': self.CHAR.vocab.n_init,
             'n_labels': len(self.CHART.vocab),
-            'n_labels': len(self.POS.vocab),
+            'n_pos_labels': len(self.POS.vocab),
             'pad_index': self.CHAR.pad_index,
             'unk_index': self.CHAR.unk_index,
             'bos_index': self.CHAR.bos_index,
@@ -80,7 +80,7 @@ class CMD(object):
         print(f"{self.TREE}\n{self.CHAR}\n{self.POS}\n{self.CHART}")
 
     def train(self, loader):
-        self.model.train()
+        self.dp_model.train()
 
         for trees, chars, (spans, labels) in loader:
             self.optimizer.zero_grad()
@@ -89,17 +89,23 @@ class CMD(object):
             lens = chars.ne(self.args.pad_index).sum(1) - 1
             mask = lens.new_tensor(range(seq_len - 1)) < lens.view(-1, 1, 1)
             mask = mask & mask.new_ones(seq_len-1, seq_len-1).triu_(1)
-            s_span, s_label = self.model(chars, None)
-            loss, _ = self.get_loss(s_span, s_label, spans, labels, mask)
+            span_mask = spans.gt(0)
+            spans = torch.nn.functional.one_hot(spans, 5).bool()[..., 1:]
+            s_span, s_label, span_loss = self.dp_model(
+                chars, None, mask, spans)
+            span_mask = span_mask & mask
+            label_loss = self.criterion(s_label[span_mask], labels[span_mask])
+            loss = span_loss.mean() + label_loss
             loss.backward()
-            nn.utils.clip_grad_norm_(self.model.parameters(),
+            nn.utils.clip_grad_norm_(self.dp_model.parameters(),
                                      self.args.clip)
             self.optimizer.step()
             self.scheduler.step()
+        # exit()
 
     @torch.no_grad()
     def evaluate(self, loader):
-        self.model.eval()
+        self.dp_model.eval()
 
         total_loss = 0
         metric = BracketMetric(self.POS.vocab.stoi.keys())
@@ -109,9 +115,14 @@ class CMD(object):
             lens = chars.ne(self.args.pad_index).sum(1) - 1
             mask = lens.new_tensor(range(seq_len - 1)) < lens.view(-1, 1, 1)
             mask = mask & mask.new_ones(seq_len-1, seq_len-1).triu_(1)
-            s_span, s_label = self.model(chars, None)
-            loss, s_span = self.get_loss(s_span, s_label, spans, labels, mask)
-            preds = self.decode(s_span, s_label, mask)
+            span_mask = spans.gt(0)
+            spans = torch.nn.functional.one_hot(spans, 5).bool()[..., 1:]
+            s_span, s_label, span_loss = self.dp_model(
+                chars, None, mask, spans)
+            span_mask = span_mask & mask
+            loss = span_loss.mean() + \
+                self.criterion(s_label[span_mask], labels[span_mask])
+            preds = self.model.decode(s_span, s_label, mask)
             preds = [build(tree,
                            [(i, j, self.CHART.vocab.itos[label])
                             for i, j, label in pred])
@@ -127,7 +138,7 @@ class CMD(object):
 
     @torch.no_grad()
     def predict(self, loader):
-        self.model.eval()
+        self.dp_model.eval()
 
         all_trees = []
         for trees, chars in loader:
@@ -135,10 +146,8 @@ class CMD(object):
             lens = chars.ne(self.args.pad_index).sum(1) - 1
             mask = lens.new_tensor(range(seq_len - 1)) < lens.view(-1, 1, 1)
             mask = mask & mask.new_ones(seq_len-1, seq_len-1).triu_(1)
-            s_span, s_label = self.model(chars, None)
-            if self.args.marg:
-                s_span = crf(s_span, mask, marg=True)
-            preds = self.decode(s_span, s_label, mask)
+            s_span, s_label, _ = self.dp_model(chars, None, mask, None)
+            preds = self.model.decode(s_span, s_label, mask)
             preds = [build(tree,
                            [(i, j, self.CHART.vocab.itos[label])
                             for i, j, label in pred])
@@ -146,19 +155,3 @@ class CMD(object):
             all_trees.extend(preds)
 
         return all_trees
-
-    def get_loss(self, s_span, s_label, spans, labels, mask):
-        span_mask = spans & mask
-        span_loss, span_probs = crf(s_span, mask, spans, self.args.marg)
-        label_loss = self.criterion(s_label[span_mask], labels[span_mask])
-        loss = span_loss + label_loss
-
-        return loss, span_probs
-
-    def decode(self, s_span, s_label, mask):
-        pred_spans = cky(s_span, mask)
-        pred_labels = s_label.argmax(-1).tolist()
-        preds = [[(i, j, labels[i][j]) for i, j in spans]
-                 for spans, labels in zip(pred_spans, pred_labels)]
-
-        return preds

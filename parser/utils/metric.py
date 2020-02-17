@@ -126,10 +126,10 @@ class BracketMetric(Metric):
             self.sgold += len(sgold)
 
     def __repr__(self):
-        s = f"CLP: {self.clp:6.2%} CLR: {self.clr:6.2%} CLF: {self.clf:6.2%} "
-        s += f"POS P: {self.plp:6.2%} POS R: {self.plr:6.2%} POS F: {self.plf:6.2%} "
-        s += f"SEG P: {self.slp:6.2%} SEG R: {self.slr:6.2%} SEG F: {self.slf:6.2%} "
-        s += f"MISPLACE: {self.misplace:6.2%} OVERALL F: {self.score:6.2%} "
+        s = f"CNT{{P: {self.clp:6.2%} R: {self.clr:6.2%} F: {self.clf:6.2%}}} "
+        s += f"POS{{P: {self.plp:6.2%} R: {self.plr:6.2%} F: {self.plf:6.2%}}} "
+        s += f"SEG{{P: {self.slp:6.2%} R: {self.slr:6.2%} F: {self.slf:6.2%}}} "
+        s += f"MP: {self.misplace:6.2%} OA F: {self.score:6.2%} "
         return s
 
     @property
