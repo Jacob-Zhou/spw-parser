@@ -123,6 +123,52 @@ class Field(RawField):
         return sequences
 
 
+class BicharField(Field):
+
+    def __init__(self, *args, **kwargs):
+        super(BicharField, self).__init__(*args, **kwargs)
+
+    def build(self, corpus, min_freq=1, embed=None):
+        sequences = getattr(corpus, self.name)
+        counter = Counter()
+        sequences = [self.preprocess(sequence) for sequence in sequences]
+        for sequence in sequences:
+            chars = [self.bos] + sequence
+            bichars = [(chars[i], chars[i+1]) for i in range(len(chars) - 1)]
+            counter.update(bichars)
+        self.vocab = Vocab(counter, min_freq, self.specials, self.unk_index)
+
+        if not embed:
+            self.embed = None
+        else:
+            tokens = self.preprocess(embed.tokens)
+            # if the `unk` token has existed in the pretrained,
+            # then replace it with a self-defined one
+            if embed.unk:
+                tokens[embed.unk_index] = self.unk
+
+            self.vocab.extend(tokens)
+            self.embed = torch.zeros(len(self.vocab), embed.dim)
+            self.embed[self.vocab.token2id(tokens)] = embed.vectors
+
+    def transform(self, sequences):
+        sequences = [self.preprocess(sequence) for sequence in sequences]
+        for i, sequence in enumerate(sequences):
+            chars = [self.bos] + sequence
+            sequences[i] = [(chars[i], chars[i+1])
+                            for i in range(len(chars) - 1)]
+        if self.use_vocab:
+            sequences = [self.vocab.token2id(sequence)
+                         for sequence in sequences]
+        if self.bos:
+            sequences = [[self.bos_index] + sequence for sequence in sequences]
+        if self.eos:
+            sequences = [sequence + [self.eos_index] for sequence in sequences]
+        sequences = [torch.tensor(sequence) for sequence in sequences]
+
+        return sequences
+
+
 class ChartField(Field):
 
     def build(self, corpus, min_freq=1):

@@ -6,7 +6,7 @@ from parser.utils.alg import cky, crf
 from parser.utils.common import bos, eos, pad, unk
 from parser.utils.corpus import Corpus, Treebank
 from parser.utils.field import (BertField, ChartField, Field,
-                                RawField)
+                                RawField, BicharField)
 from parser.utils.fn import build, factorize
 from parser.utils.metric import BracketMetric
 
@@ -26,9 +26,10 @@ class CMD(object):
             self.TREE = RawField('trees')
             self.CHAR = Field('chars', pad=pad, unk=unk,
                               bos=bos, eos=eos, lower=True)
+            self.FEAT = BicharField('bichar', pad=pad, unk=unk,
+                                    bos=bos, eos=eos, lower=True)
             self.POS = Field('pos')
 
-            self.FEAT = None
             self.CHART = ChartField('charts')
             if args.feat == 'bert':
                 tokenizer = BertTokenizer.from_pretrained(args.bert_model)
@@ -37,15 +38,10 @@ class CMD(object):
                                       bos='[CLS]',
                                       eos='[SEP]',
                                       tokenize=tokenizer.encode)
-                self.fields = Treebank(TREE=self.TREE,
-                                       CHAR=(self.CHAR, self.FEAT),
-                                       POS=self.POS,
-                                       CHART=self.CHART)
-            else:
-                self.fields = Treebank(TREE=self.TREE,
-                                       CHAR=self.CHAR,
-                                       POS=self.POS,
-                                       CHART=self.CHART)
+            self.fields = Treebank(TREE=self.TREE,
+                                   CHAR=(self.CHAR, self.FEAT),
+                                   POS=self.POS,
+                                   CHART=self.CHART)
 
             train = Corpus.load(args.ftrain, self.fields)
             if args.fembed:
@@ -53,23 +49,24 @@ class CMD(object):
             else:
                 embed = None
             self.CHAR.build(train, args.min_freq, embed)
-            if self.FEAT:
+            if args.feat == 'bert':
                 self.FEAT.build(train)
+            else:
+                self.FEAT.build(train, min_freq=args.min_freq*5)
             self.CHART.build(train)
             self.POS.build(train)
             torch.save(self.fields, args.fields)
         else:
             self.fields = torch.load(args.fields)
             self.TREE = self.fields.TREE
-            self.CHAR = self.fields.CHAR
+            self.CHAR, self.FEAT = self.fields.CHAR
             self.POS = self.fields.POS
             self.CHART = self.fields.CHART
         self.criterion = nn.CrossEntropyLoss()
-
         args.update({
             'n_chars': self.CHAR.vocab.n_init,
+            'n_feats': self.FEAT.vocab.n_init,
             'n_labels': len(self.CHART.vocab),
-            'n_pos_labels': len(self.POS.vocab),
             'pad_index': self.CHAR.pad_index,
             'unk_index': self.CHAR.unk_index,
             'bos_index': self.CHAR.bos_index,
@@ -77,12 +74,12 @@ class CMD(object):
         })
 
         print(f"Override the default configs\n{args}")
-        print(f"{self.TREE}\n{self.CHAR}\n{self.POS}\n{self.CHART}")
+        print(f"{self.TREE}\n{self.CHAR}\n{self.FEAT}\n{self.POS}\n{self.CHART}")
 
     def train(self, loader):
         self.dp_model.train()
 
-        for trees, chars, (spans, labels) in loader:
+        for trees, chars, feats, (spans, labels) in loader:
             self.optimizer.zero_grad()
 
             batch_size, seq_len = chars.shape
@@ -92,7 +89,7 @@ class CMD(object):
             span_mask = spans.gt(0)
             spans = torch.nn.functional.one_hot(spans, 5).bool()[..., 1:]
             s_span, s_label, span_loss = self.dp_model(
-                chars, None, mask, spans)
+                chars, feats, mask, spans)
             span_mask = span_mask & mask
             label_loss = self.criterion(s_label[span_mask], labels[span_mask])
             loss = span_loss.mean() + label_loss
@@ -110,7 +107,7 @@ class CMD(object):
         total_loss = 0
         metric = BracketMetric(self.POS.vocab.stoi.keys())
 
-        for trees, chars, (spans, labels) in loader:
+        for trees, chars, feats, (spans, labels) in loader:
             batch_size, seq_len = chars.shape
             lens = chars.ne(self.args.pad_index).sum(1) - 1
             mask = lens.new_tensor(range(seq_len - 1)) < lens.view(-1, 1, 1)
@@ -118,7 +115,7 @@ class CMD(object):
             span_mask = spans.gt(0)
             spans = torch.nn.functional.one_hot(spans, 5).bool()[..., 1:]
             s_span, s_label, span_loss = self.dp_model(
-                chars, None, mask, spans)
+                chars, feats, mask, spans)
             span_mask = span_mask & mask
             loss = span_loss.mean() + \
                 self.criterion(s_label[span_mask], labels[span_mask])
@@ -141,12 +138,12 @@ class CMD(object):
         self.dp_model.eval()
 
         all_trees = []
-        for trees, chars in loader:
+        for trees, chars, feats in loader:
             batch_size, seq_len = chars.shape
             lens = chars.ne(self.args.pad_index).sum(1) - 1
             mask = lens.new_tensor(range(seq_len - 1)) < lens.view(-1, 1, 1)
             mask = mask & mask.new_ones(seq_len-1, seq_len-1).triu_(1)
-            s_span, s_label, _ = self.dp_model(chars, None, mask, None)
+            s_span, s_label, _ = self.dp_model(chars, feats, mask, None)
             preds = self.model.decode(s_span, s_label, mask)
             preds = [build(tree,
                            [(i, j, self.CHART.vocab.itos[label])
