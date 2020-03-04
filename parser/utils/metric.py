@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 from collections import Counter
+from parser.utils.common import pos_label
 
 
 class Metric(object):
@@ -74,8 +75,6 @@ class BracketMetric(Metric):
         self.cgold = 0.0
         self.sgold = 0.0
         self.eps = eps
-        self.pos_label = {"NN", "VV", "PU", "AD", "NR", "PN", "P", "CD", "M", "VA", "DEG", "JJ", "DEC", "VC", "NT", "SP", "DT", "LC",
-                          "CC", "AS", "VE", "IJ", "OD", "CS", "MSP", "BA", "DEV", "SB", "ETC", "DER", "LB", "IC", "NOI", "URL", "EM", "ON", "FW", "X"}
 
     def __call__(self, preds, golds):
         for pred, gold in zip(preds, golds):
@@ -83,22 +82,22 @@ class BracketMetric(Metric):
             agold = Counter(gold)
 
             cpred = Counter([(i, j, label)
-                             for i, j, label in pred if label not in self.pos_label])
+                             for i, j, label in pred if label not in pos_label])
             cgold = Counter([(i, j, label)
-                             for i, j, label in gold if label not in self.pos_label])
+                             for i, j, label in gold if label not in pos_label])
 
             ucpred = Counter([(i, j)
-                              for i, j, label in pred if label not in self.pos_label])
+                              for i, j, label in pred if label not in pos_label])
             uppred = Counter([(i, j)
-                              for i, j, label in pred if label in self.pos_label])
+                              for i, j, label in pred if label in pos_label])
             ucgold = Counter([(i, j)
-                              for i, j, label in gold if label not in self.pos_label])
+                              for i, j, label in gold if label not in pos_label])
             upgold = Counter([(i, j)
-                              for i, j, label in gold if label in self.pos_label])
+                              for i, j, label in gold if label in pos_label])
 
             ppred = set(pred)
             pgold = set([(i, j, label)
-                         for i, j, label in gold if label in self.pos_label])
+                         for i, j, label in gold if label in pos_label])
 
             spred = [0] + sorted(set([j for _, j, _ in pred]))
             spred = set((spred[i], spred[i+1]) for i in range(len(spred) - 1))
@@ -118,12 +117,18 @@ class BracketMetric(Metric):
             self.cltp += len(cltp)
             self.pltp += len(pltp)
             self.sltp += len(sltp)
-            self.pred += len(pred)
-            self.gold += len(gold)
-            self.cpred += len(cpred)
-            self.cgold += len(cgold)
-            self.spred += len(spred)
-            self.sgold += len(sgold)
+
+            pred_span_count = len(pred)
+            gold_span_count = len(gold)
+            pred_word_count = len(spred)
+            gold_word_count = len(sgold)
+
+            self.pred += pred_span_count
+            self.gold += gold_span_count
+            self.cpred += pred_span_count - pred_word_count
+            self.cgold += gold_span_count - gold_word_count
+            self.spred += pred_word_count
+            self.sgold += gold_word_count
 
     def __repr__(self):
         s = f"CNT{{P: {self.clp:6.2%} R: {self.clr:6.2%} F: {self.clf:6.2%}}} "

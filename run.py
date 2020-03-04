@@ -32,7 +32,7 @@ if __name__ == '__main__':
         subparser.add_argument('--threads', '-t', default=8, type=int,
                                help='max num of threads')
         subparser.add_argument('--feat', default=None,
-                               choices=[None, 'bert'],
+                               choices=[None, 'bert', 'bigram', 'trigram'],
                                help='choices of additional features')
         subparser.add_argument('--batch-size', default=5000, type=int,
                                help='batch size')

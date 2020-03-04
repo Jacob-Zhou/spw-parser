@@ -2,7 +2,7 @@
 
 from collections import Counter
 from parser.utils.vocab import Vocab
-
+from parser.utils.fn import tohalfwidth
 import torch
 
 
@@ -29,13 +29,14 @@ class RawField(object):
 class Field(RawField):
 
     def __init__(self, name, pad=None, unk=None, bos=None, eos=None,
-                 lower=False, use_vocab=True, tokenize=None, fn=None):
+                 lower=False, tohalfwidth=False, use_vocab=True, tokenize=None, fn=None):
         self.name = name
         self.pad = pad
         self.unk = unk
         self.bos = bos
         self.eos = eos
         self.lower = lower
+        self.tohalfwidth = tohalfwidth
         self.use_vocab = use_vocab
         self.tokenize = tokenize
         self.fn = fn
@@ -57,6 +58,8 @@ class Field(RawField):
             params.append(f"lower={self.lower}")
         if not self.use_vocab:
             params.append(f"use_vocab={self.use_vocab}")
+        if self.tohalfwidth:
+            params.append(f"tohalfwidth={self.tohalfwidth}")
         s += f", ".join(params)
         s += f")"
 
@@ -85,6 +88,8 @@ class Field(RawField):
             sequence = self.tokenize(sequence)
         if self.lower:
             sequence = [str.lower(token) for token in sequence]
+        if self.tohalfwidth:
+            sequence = [tohalfwidth(token) for token in sequence]
 
         return sequence
 
@@ -123,21 +128,24 @@ class Field(RawField):
         return sequences
 
 
-class BicharField(Field):
-
+class NGramField(Field):
     def __init__(self, *args, **kwargs):
-        super(BicharField, self).__init__(*args, **kwargs)
+        self.n = kwargs.pop('n') if 'n' in kwargs else 1
+        super(NGramField, self).__init__(*args, **kwargs)
 
-    def build(self, corpus, min_freq=1, embed=None):
+    def build(self, corpus, min_freq=1, dict_file=None, embed=None):
         sequences = getattr(corpus, self.name)
         counter = Counter()
         sequences = [self.preprocess(sequence) for sequence in sequences]
+        n_pad = (self.n - 1)
         for sequence in sequences:
-            chars = [self.bos] + sequence
-            bichars = [(chars[i], chars[i+1]) for i in range(len(chars) - 1)]
+            chars = sequence + [self.eos] * n_pad
+            bichars = ["".join(chars[i + s] for s in range(self.n))
+                       for i in range(len(chars) - n_pad)]
             counter.update(bichars)
+        if dict_file is not None:
+            counter &= self.read_dict(dict_file)
         self.vocab = Vocab(counter, min_freq, self.specials, self.unk_index)
-
         if not embed:
             self.embed = None
         else:
@@ -150,13 +158,46 @@ class BicharField(Field):
             self.vocab.extend(tokens)
             self.embed = torch.zeros(len(self.vocab), embed.dim)
             self.embed[self.vocab.token2id(tokens)] = embed.vectors
+            self.embed /= torch.std(self.embed)
+
+    def read_dict(self, dict_file):
+        word_list = dict()
+        with open(dict_file, encoding='utf-8') as dict_in:
+            for line in dict_in:
+                line = line.split()
+                if len(line) == 3:
+                    word_list[line[0]] = 100
+        return Counter(word_list)
+
+    def __repr__(self):
+        s, params = f"({self.name}): {self.__class__.__name__}(", []
+        params.append(f"n={self.n}")
+        if self.pad is not None:
+            params.append(f"pad={self.pad}")
+        if self.unk is not None:
+            params.append(f"unk={self.unk}")
+        if self.bos is not None:
+            params.append(f"bos={self.bos}")
+        if self.eos is not None:
+            params.append(f"eos={self.eos}")
+        if self.lower:
+            params.append(f"lower={self.lower}")
+        if not self.use_vocab:
+            params.append(f"use_vocab={self.use_vocab}")
+        if self.tohalfwidth:
+            params.append(f"tohalfwidth={self.tohalfwidth}")
+        s += f", ".join(params)
+        s += f")"
+
+        return s
 
     def transform(self, sequences):
         sequences = [self.preprocess(sequence) for sequence in sequences]
-        for i, sequence in enumerate(sequences):
-            chars = [self.bos] + sequence
-            sequences[i] = [(chars[i], chars[i+1])
-                            for i in range(len(chars) - 1)]
+        n_pad = (self.n - 1)
+        for sent_idx, sequence in enumerate(sequences):
+            chars = sequence + [self.eos] * n_pad
+            sequences[sent_idx] = ["".join(chars[i + s] for s in range(self.n))
+                                   for i in range(len(chars) - n_pad)]
         if self.use_vocab:
             sequences = [self.vocab.token2id(sequence)
                          for sequence in sequences]
@@ -177,7 +218,11 @@ class ChartField(Field):
                           for sequence in sequences
                           for i, j, label in self.preprocess(sequence))
 
-        self.vocab = Vocab(counter, min_freq, self.specials, self.unk_index)
+        meta_labels = Counter({label.split(
+            "+")[-1]: min_freq for label, freq in counter.items() if freq < min_freq})
+        counter |= meta_labels
+        self.vocab = Vocab(counter, min_freq, self.specials,
+                           self.unk_index, keep_sorted_label=True)
         self.pos_label = {"NN", "VV", "PU", "AD", "NR", "PN", "P", "CD", "M", "VA", "DEG", "JJ", "DEC", "VC", "NT", "SP", "DT", "LC",
                           "CC", "AS", "VE", "IJ", "OD", "CS", "MSP", "BA", "DEV", "SB", "ETC", "DER", "LB", "IC", "NOI", "URL", "EM", "ON", "FW", "X"}
 
@@ -195,6 +240,17 @@ class ChartField(Field):
             else:
                 return 4
 
+    def get_label_index(self, label):
+        if label in self.vocab:
+            return self.vocab[label]
+        else:
+            label_set = set(label.split("+")[:-1])
+            last_state = label.split("+")[-1]
+            for l_set, whole_l, last_l in self.vocab.sorted_label:
+                if last_state == last_l and len(l_set - label_set) <= 0:
+                    return self.vocab[whole_l]
+            return self.vocab[last_state]
+
     def transform(self, sequences):
         sequences = [self.preprocess(sequence) for sequence in sequences]
         spans, labels = [], []
@@ -205,10 +261,9 @@ class ChartField(Field):
             label_chart = torch.full((seq_len, seq_len), self.pad_index).long()
             for i, j, label in sequence:
                 span_chart[i, j] = self.label_cluster(label)
-                label_chart[i, j] = self.vocab[label]
+                label_chart[i, j] = self.get_label_index(label)
             spans.append(span_chart)
             labels.append(label_chart)
-
         return list(zip(spans, labels))
 
 
