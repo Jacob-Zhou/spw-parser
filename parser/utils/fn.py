@@ -3,7 +3,6 @@
 import unicodedata
 
 from nltk.tree import Tree
-from parser.utils.common import pos_label
 
 
 def ispunct(token):
@@ -122,8 +121,8 @@ def decompose(tree):
             nodes.extend([child for child in node])
             for i, child in enumerate(node):
                 if isinstance(child, Tree) and len(child) == 1 and isinstance(child[0], str):
-                    node[i] = Tree(child.label(), [Tree("CHAR", [char])
-                                                   for char in child[0]])
+                    node[i] = Tree(child.label()+"@p", [Tree("CHAR", [char])
+                                                        for char in child[0]])
 
     return tree, pos
 
@@ -136,8 +135,9 @@ def compose(tree):
         if isinstance(node, Tree):
             nodes.extend([child for child in node])
             for i, child in enumerate(node):
-                if isinstance(child, Tree) and child.label() in pos_label:
-                    node[i] = Tree(child.label(), ["".join(child.leaves())])
+                if isinstance(child, Tree) and child.label().endswith("@p"):
+                    node[i] = Tree(child.label()[:-2],
+                                   ["".join(child.leaves())])
 
     return tree
 
@@ -145,10 +145,16 @@ def compose(tree):
 def factorize(tree, delete_labels=None, equal_labels=None):
     def track(tree, i):
         label = tree.label()
+        suffix = ""
+        if label.endswith("@p"):
+            label = label[:-2]
+            suffix = "@p"
         if delete_labels is not None and label in delete_labels:
             label = None
         if equal_labels is not None:
             label = equal_labels.get(label, label)
+        if label is not None:
+            label += suffix
         if len(tree) == 1 and not isinstance(tree[0], Tree):
             return (i+1 if label is not None else i), []
         j, spans = i, []
@@ -168,7 +174,7 @@ def build(tree, sequence):
 
     def recover(label, children):
         if label.endswith('|<>'):
-            if label[:-3] in pos_label:
+            if label[:-3].endswith('@p'):
                 label = label[:-3]
                 tree = Tree(label, children)
                 return [Tree(label, [Tree("CHAR", [char])
@@ -179,7 +185,7 @@ def build(tree, sequence):
             sublabels = [l for l in label.split('+')]
             sublabel = sublabels[-1]
             tree = Tree(sublabel, children)
-            if sublabel in pos_label:
+            if sublabel.endswith('@p'):
                 tree = Tree(sublabel, [Tree("CHAR", [char])
                                        for char in tree.leaves()])
             for sublabel in reversed(sublabels[:-1]):

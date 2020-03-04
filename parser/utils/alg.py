@@ -51,7 +51,6 @@ def crf(scores, transitions, start_transitions, mask, target=None, marg=False):
     lens = mask[:, 0].sum(-1)
     total = lens.sum()
     batch_size, seq_len, seq_len, n_labels = scores.shape
-    mask = mask.view(batch_size, seq_len, seq_len, 1).expand_as(scores)
     # always enable the gradient computation of scores
     # in order for the computation of marginal probs
     s = inside(scores.requires_grad_(), transitions,
@@ -67,24 +66,23 @@ def crf(scores, transitions, start_transitions, mask, target=None, marg=False):
             logZ, scores, retain_graph=scores.requires_grad)
     if target is None:
         return None, probs
-
-    mask = target & mask
     s = inside(scores.requires_grad_(), transitions,
-               start_transitions, mask)
+               start_transitions, mask, target)
     score = s[0].gather(0, lens).logsumexp(1).sum()
     loss = (logZ - score) / total
     return loss, probs
 
 
-def inside(scores, transitions, start_transitions, mask):
-    lens = mask[:, 0].sum(-1)
+def inside(scores, transitions, start_transitions, mask, cands=None):
     batch_size, seq_len, seq_len, n_labels = scores.shape
     # [seq_len, seq_len, n_labels, batch_size]
     scores = scores.permute(1, 2, 3, 0)
     # [seq_len, seq_len, n_labels, batch_size]
-    mask = mask.permute(1, 2, 3, 0)
-    scores = scores.masked_fill(~mask, -1e32)
-    mask = mask.any(2)
+    mask = mask.permute(1, 2, 0)
+    if cands is not None:
+        cands = cands.permute(1, 2, 3, 0)
+        cands = cands & mask.view(seq_len, seq_len, 1, batch_size)
+        scores = scores.masked_fill(~cands, -1e36)
     s = torch.full_like(scores, float('-inf'))
 
     start_transitions = start_transitions.view(1, 1, n_labels)
@@ -115,7 +113,7 @@ def inside(scores, transitions, start_transitions, mask):
                                1, n_labels, 1)[diag_mask]
         # [*, w-1, n_labels, n_labels, n_labels]
         inner = s_left + s_right + transitions + emit_scores
-        # [*, n, n_labels]
+        # [*, n_labels]
         inner = inner.logsumexp([1, 2, 3])
         diag_s[diag_mask] = inner
     return s
@@ -236,7 +234,7 @@ def heatmap(corr, name='matrix'):
     cmap = "RdBu"
     for i in range(4):
         # Draw the heatmap with the mask and correct aspect ratio
-        sns.heatmap(corr[..., i], cmap=cmap, center=0, ax=ax[i//2][i % 2],
+        sns.heatmap(corr[..., i], cmap=cmap, center=-1, ax=ax[i//2][i % 2],
                     square=True, linewidths=.5,
                     xticklabels=False, yticklabels=False,
                     cbar=False, vmax=1.5, vmin=-1.5)

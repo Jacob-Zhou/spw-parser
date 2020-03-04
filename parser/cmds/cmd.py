@@ -104,7 +104,6 @@ class CMD(object):
 
         args.update({
             'n_chars': self.CHAR.vocab.n_init,
-            'n_feats': self.FEAT.vocab.n_init,
             'n_labels': len(self.CHART.vocab),
             'n_pos_labels': len(self.POS.vocab),
             'pad_index': self.CHAR.pad_index,
@@ -136,7 +135,7 @@ class CMD(object):
     def train(self, loader):
         self.dp_model.train()
 
-        for data in loader:
+        for i, data in enumerate(loader):
             if self.args.feat == 'bert':
                 trees, chars, feats, pos, (spans, labels) = data
                 feed_dict = {"chars": chars, "feats": feats}
@@ -151,31 +150,31 @@ class CMD(object):
                 trees, chars, pos, (spans, labels) = data
                 feed_dict = {"chars": chars}
 
-            self.optimizer.zero_grad()
-
             batch_size, seq_len = chars.shape
             lens = chars.ne(self.args.pad_index).sum(1) - 1
             mask = lens.new_tensor(range(seq_len - 1)) < lens.view(-1, 1, 1)
             mask = mask & mask.new_ones(seq_len-1, seq_len-1).triu_(1)
             span_mask = spans.gt(0)
             spans = torch.nn.functional.one_hot(spans, 5).bool()[..., 1:]
+            feed_dict.update({"target": spans, "mask": mask})
             s_span, s_label, span_loss = self.dp_model(feed_dict)
             span_mask = span_mask & mask
             label_loss = self.criterion(s_label[span_mask], labels[span_mask])
-            loss = span_loss.mean() + label_loss
+            loss = (span_loss.mean() + label_loss) / self.args.update_steps
             loss.backward()
-            nn.utils.clip_grad_norm_(self.dp_model.parameters(),
-                                     self.args.clip)
-            self.optimizer.step()
-            self.scheduler.step()
-        # exit()
+            if (i + 1) % self.args.update_steps == 0 or i == len(loader):
+                nn.utils.clip_grad_norm_(self.dp_model.parameters(),
+                                         self.args.clip)
+                self.optimizer.step()
+                self.scheduler.step()
+                self.optimizer.zero_grad()
 
     @torch.no_grad()
     def evaluate(self, loader):
         self.dp_model.eval()
 
         total_loss = 0
-        metric = BracketMetric(self.POS.vocab.stoi.keys())
+        metric = BracketMetric()
 
         for data in loader:
             if self.args.feat == 'bert':
@@ -198,6 +197,7 @@ class CMD(object):
             mask = mask & mask.new_ones(seq_len-1, seq_len-1).triu_(1)
             span_mask = spans.gt(0)
             spans = torch.nn.functional.one_hot(spans, 5).bool()[..., 1:]
+            feed_dict.update({"target": spans, "mask": mask})
             s_span, s_label, span_loss = self.dp_model(feed_dict)
             span_mask = span_mask & mask
             loss = span_loss.mean() + \
@@ -239,6 +239,7 @@ class CMD(object):
             lens = chars.ne(self.args.pad_index).sum(1) - 1
             mask = lens.new_tensor(range(seq_len - 1)) < lens.view(-1, 1, 1)
             mask = mask & mask.new_ones(seq_len-1, seq_len-1).triu_(1)
+            feed_dict.update({"mask": mask})
             s_span, s_label, _ = self.dp_model(feed_dict)
             preds = self.model.decode(s_span, s_label, mask)
             preds = [build(tree,

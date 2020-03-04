@@ -223,19 +223,17 @@ class ChartField(Field):
         counter |= meta_labels
         self.vocab = Vocab(counter, min_freq, self.specials,
                            self.unk_index, keep_sorted_label=True)
-        self.pos_label = {"NN", "VV", "PU", "AD", "NR", "PN", "P", "CD", "M", "VA", "DEG", "JJ", "DEC", "VC", "NT", "SP", "DT", "LC",
-                          "CC", "AS", "VE", "IJ", "OD", "CS", "MSP", "BA", "DEV", "SB", "ETC", "DER", "LB", "IC", "NOI", "URL", "EM", "ON", "FW", "X"}
 
     def label_cluster(self, label):
         if label.endswith("|<>"):
             label = label[:-3].split("+")[-1]
-            if label in self.pos_label:
+            if label.endswith("@p"):
                 return 1
             else:
                 return 3
         else:
             label = label.split("+")[-1]
-            if label in self.pos_label:
+            if label.endswith("@p"):
                 return 2
             else:
                 return 4

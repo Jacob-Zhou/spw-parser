@@ -47,7 +47,9 @@ class Train(CMD):
         test = TextDataset(
             test, self.fields, args.buckets)
         # set the data loaders
-        train.loader = batchify(train, args.batch_size, True)
+        train.loader = batchify(train,
+                                args.batch_size//self.args.update_steps,
+                                True)
         dev.loader = batchify(dev, args.batch_size)
         test.loader = batchify(test, args.batch_size)
         print(f"{'train:':6} {len(train):5} sentences, "

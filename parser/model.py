@@ -98,10 +98,11 @@ class Model(nn.Module):
 
     def forward(self, feed_dict):
         chars = feed_dict["chars"]
+        target = feed_dict.get("target", None)
+        mask = feed_dict["mask"]
         batch_size, seq_len = chars.shape
         # get the mask and lengths of given batch
-        mask = chars.ne(self.pad_index)
-        lens = mask.sum(dim=1)
+        lens = chars.ne(self.pad_index).sum(dim=1)
         ext_chars = chars
         # set the indices larger than num_embeddings to unk_index
         if self.pretrained:
@@ -170,6 +171,7 @@ class Model(nn.Module):
         loss, s_span = self.crf(s_span, mask, target)
         # [batch_size, seq_len, seq_len, n_labels]
         s_label = self.label_attn(label_l, label_r).permute(0, 2, 3, 1)
+        # s_label = s_label + self.cluster_bias(s_span.detach())
         s_label = s_label + \
             self.cluster_bias(target.float() if self.training else s_span)
         # heatmap(self.cluster_bias.weight.t().detach().cpu(), "cluster_bias")

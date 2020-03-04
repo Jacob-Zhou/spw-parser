@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 
 from collections import Counter
-from parser.utils.common import pos_label
 
 
 class Metric(object):
@@ -59,7 +58,7 @@ class AttachmentMetric(Metric):
 
 class BracketMetric(Metric):
 
-    def __init__(self, pos_label, eps=1e-8):
+    def __init__(self, eps=1e-8):
         super(BracketMetric, self).__init__()
 
         self.n = 0.0
@@ -82,22 +81,22 @@ class BracketMetric(Metric):
             agold = Counter(gold)
 
             cpred = Counter([(i, j, label)
-                             for i, j, label in pred if label not in pos_label])
+                             for i, j, label in pred if not label.endswith("@p")])
             cgold = Counter([(i, j, label)
-                             for i, j, label in gold if label not in pos_label])
+                             for i, j, label in gold if not label.endswith("@p")])
 
             ucpred = Counter([(i, j)
-                              for i, j, label in pred if label not in pos_label])
+                              for i, j, label in pred if not label.endswith("@p")])
             uppred = Counter([(i, j)
-                              for i, j, label in pred if label in pos_label])
+                              for i, j, label in pred if label.endswith("@p")])
             ucgold = Counter([(i, j)
-                              for i, j, label in gold if label not in pos_label])
+                              for i, j, label in gold if not label.endswith("@p")])
             upgold = Counter([(i, j)
-                              for i, j, label in gold if label in pos_label])
+                              for i, j, label in gold if label.endswith("@p")])
 
             ppred = set(pred)
             pgold = set([(i, j, label)
-                         for i, j, label in gold if label in pos_label])
+                         for i, j, label in gold if label.endswith("@p")])
 
             spred = [0] + sorted(set([j for _, j, _ in pred]))
             spred = set((spred[i], spred[i+1]) for i in range(len(spred) - 1))
@@ -131,10 +130,10 @@ class BracketMetric(Metric):
             self.sgold += gold_word_count
 
     def __repr__(self):
-        s = f"CNT{{P: {self.clp:6.2%} R: {self.clr:6.2%} F: {self.clf:6.2%}}} "
-        s += f"POS{{P: {self.plp:6.2%} R: {self.plr:6.2%} F: {self.plf:6.2%}}} "
-        s += f"SEG{{P: {self.slp:6.2%} R: {self.slr:6.2%} F: {self.slf:6.2%}}} "
-        s += f"MP: {self.misplace:6.2%} OA F: {self.score:6.2%} "
+        s = f"CLP: {self.clp:6.2%} CLR: {self.clr:6.2%} CLF: {self.clf:6.2%} "
+        s += f"POS P: {self.plp:6.2%} POS R: {self.plr:6.2%} POS F: {self.plf:6.2%} "
+        s += f"SEG P: {self.slp:6.2%} SEG R: {self.slr:6.2%} SEG F: {self.slf:6.2%} "
+        s += f"MISPLACE: {self.misplace:6.2%} OVERALL F: {self.score:6.2%} "
         return s
 
     @property

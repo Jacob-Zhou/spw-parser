@@ -21,7 +21,7 @@ class TreeCRFLoss(nn.Module):
         return crf(scores,
                    self.transitions,
                    self.start_transitions,
-                   mask, target, self.marg)
+                   mask, target, not self.training)
 
     def cky(self, scores, mask):
         return cky(scores,
