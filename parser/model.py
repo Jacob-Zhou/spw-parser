@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 
-from parser.modules import CHAR_LSTM, MLP, BertEmbedding, Biaffine, BiLSTM
+from parser.modules import CHAR_LSTM, MLP, BertEmbedding, Biaffine, BiLSTM, TreeCRFLoss
 from parser.modules.dropout import IndependentDropout, SharedDropout
+from parser.utils.alg import simple_cky
 
 import torch
 import torch.nn as nn
@@ -55,12 +56,19 @@ class Model(nn.Module):
 
         # the Biaffine layers
         self.span_attn = Biaffine(n_in=args.n_mlp_span,
+                                  n_out=2,
                                   bias_x=True,
                                   bias_y=False)
         self.label_attn = Biaffine(n_in=args.n_mlp_label,
                                    n_out=args.n_labels,
                                    bias_x=True,
                                    bias_y=True)
+
+        self.crf = TreeCRFLoss(2, True)
+        self.cluster_bias = nn.Linear(
+            in_features=2,
+            out_features=args.n_labels,
+            bias=False)
         self.pad_index = args.pad_index
         self.unk_index = args.unk_index
 
@@ -71,11 +79,15 @@ class Model(nn.Module):
 
         return self
 
-    def forward(self, words, feats):
+    def forward(self, feed_dict):
+        words = feed_dict["words"]
+        feats = feed_dict["feats"]
+        target = feed_dict.get("target", None)
+        mask = feed_dict["mask"]
         batch_size, seq_len = words.shape
         # get the mask and lengths of given batch
-        mask = words.ne(self.pad_index)
-        lens = mask.sum(dim=1)
+        word_mask = words.ne(self.pad_index)
+        lens = word_mask.sum(dim=1)
         ext_words = words
         # set the indices larger than num_embeddings to unk_index
         if hasattr(self, 'pretrained'):
@@ -87,7 +99,7 @@ class Model(nn.Module):
         if hasattr(self, 'pretrained'):
             word_embed += self.pretrained(words)
         if self.args.feat == 'char':
-            feat_embed = self.feat_embed(feats[mask])
+            feat_embed = self.feat_embed(feats[word_mask])
             feat_embed = pad_sequence(feat_embed.split(lens.tolist()), True)
             word_embed, feat_embed = self.embed_dropout(word_embed, feat_embed)
             # concatenate the word and feat representations
@@ -113,12 +125,22 @@ class Model(nn.Module):
         label_l = self.mlp_label_l(x)
         label_r = self.mlp_label_r(x)
 
-        # [batch_size, seq_len, seq_len]
-        s_span = self.span_attn(span_l, span_r)
+        # [batch_size, seq_len, seq_len, 4]
+        s_span = self.span_attn(span_l, span_r).permute(0, 2, 3, 1)
+        loss, s_span = self.crf(s_span, mask, target)
         # [batch_size, seq_len, seq_len, n_labels]
         s_label = self.label_attn(label_l, label_r).permute(0, 2, 3, 1)
+        s_label = s_label + self.cluster_bias(s_span.detach())
 
-        return s_span, s_label
+        return s_span, s_label, loss.view(1) if loss is not None else None
+
+    def decode(self, s_span, s_label, mask):
+        pred_spans = simple_cky(s_span, mask)
+        pred_labels = s_label.argmax(-1).tolist()
+        preds = [[(i, j, labels[i][j]) for i, j, _ in spans]
+                 for spans, labels in zip(pred_spans, pred_labels)]
+
+        return preds
 
     @classmethod
     def load(cls, path):
@@ -141,3 +163,26 @@ class Model(nn.Module):
             'pretrained': pretrained
         }
         torch.save(state, path)
+
+
+def heatmap(corr, name='matrix'):
+    import seaborn as sns
+    import matplotlib.pyplot as plt
+
+    sns.set(style="white")
+
+    # Set up the matplotlib figure
+    f, ax = plt.subplots(figsize=(200, 4))
+
+    # Generate a custom diverging colormap
+    # cmap = sns.diverging_palette(220, 10, as_cmap=True)
+
+    cmap = "RdBu"
+
+    # Draw the heatmap with the mask and correct aspect ratio
+    sns.heatmap(corr, cmap=cmap, center=0, ax=ax,
+                square=True, linewidths=.5,
+                xticklabels=False, yticklabels=False,
+                cbar=False)
+    plt.savefig(f'{name}.png')
+    plt.close()

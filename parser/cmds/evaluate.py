@@ -32,6 +32,7 @@ class Evaluate(CMD):
 
         print("Load the model")
         self.model = Model.load(args.model)
+        self.dp_model = self.model
         print(f"{self.model}\n")
 
         print("Evaluate the dataset")

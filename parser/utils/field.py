@@ -184,16 +184,19 @@ class ChartField(Field):
 
         self.vocab = Vocab(counter, min_freq, self.specials, self.unk_index)
 
+    def label_cluster(self, label):
+        return 1 if label.endswith("|<>") else 2
+
     def transform(self, sequences):
         sequences = [self.preprocess(sequence) for sequence in sequences]
         spans, labels = [], []
 
         for sequence in sequences:
             seq_len = sequence[0][1] + 1
-            span_chart = torch.full((seq_len, seq_len), self.pad_index).bool()
+            span_chart = torch.full((seq_len, seq_len), self.pad_index).long()
             label_chart = torch.full((seq_len, seq_len), self.pad_index).long()
             for i, j, label in sequence:
-                span_chart[i, j] = 1
+                span_chart[i, j] = self.label_cluster(label)
                 label_chart[i, j] = self.vocab[label]
             spans.append(span_chart)
             labels.append(label_chart)

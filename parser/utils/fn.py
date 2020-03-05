@@ -89,6 +89,28 @@ def binarize(tree):
     return tree
 
 
+def multi_dim_max(tensor, dims):
+    value_tensor = None
+    index_tensor = None
+    for dim in dims:
+        if value_tensor is not None:
+            assert index_tensor is not None
+            val, idx = value_tensor.max(dim, keepdim=True)
+            expand_shape = index_tensor.shape
+            expand_shape = [-1] * (len(expand_shape) - 1) + [expand_shape[-1]]
+            idx = idx.unsqueeze(-1)
+            index_tensor = index_tensor.gather(dim, idx.expand(expand_shape))
+            index_tensor = torch.cat([index_tensor, idx], -1)
+        else:
+            val, idx = tensor.max(dim, keepdim=True)
+            index_tensor = idx.unsqueeze(-1)
+        value_tensor = val
+    for i, dim in enumerate(sorted(dims)):
+        value_tensor = value_tensor.squeeze(dim - i)
+        index_tensor = index_tensor.squeeze(dim - i)
+    return value_tensor, index_tensor
+
+
 def factorize(tree, delete_labels=None, equal_labels=None):
     def track(tree, i):
         label = tree.label()

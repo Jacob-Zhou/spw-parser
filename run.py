@@ -21,7 +21,7 @@ if __name__ == '__main__':
         subparser = subcommand.add_subparser(name, subparsers)
         subparser.add_argument('--conf', '-c', default='config.ini',
                                help='path to config file')
-        subparser.add_argument('--file', '-f', default='exp/ptb.char',
+        subparser.add_argument('--file', '-f', default='exp/ctb51.char',
                                help='path to saved files')
         subparser.add_argument('--preprocess', '-p', action='store_true',
                                help='whether to preprocess the data first')

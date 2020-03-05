@@ -43,7 +43,9 @@ class Train(CMD):
         dev = TextDataset(dev, self.fields, args.buckets)
         test = TextDataset(test, self.fields, args.buckets)
         # set the data loaders
-        train.loader = batchify(train, args.batch_size, True)
+        train.loader = batchify(train,
+                                args.batch_size//self.args.update_steps,
+                                True)
         dev.loader = batchify(dev, args.batch_size)
         test.loader = batchify(test, args.batch_size)
         print(f"{'train:':6} {len(train):5} sentences, "
@@ -60,8 +62,9 @@ class Train(CMD):
         self.model = Model(args).load_pretrained(self.WORD.embed)
         print(f"{self.model}\n")
         self.model = self.model.to(args.device)
+        self.dp_model = self.model
         if torch.cuda.device_count() > 1:
-            self.model = nn.DataParallel(self.model)
+            self.dp_model = nn.DataParallel(self.model)
         self.optimizer = Adam(self.model.parameters(),
                               args.lr,
                               (args.mu, args.nu),
