@@ -84,7 +84,7 @@ class CMD(object):
                 self.TRIGRAM.build(train, args.min_freq,
                                    embed=embed,
                                    dict_file=args.dict_file)
-            self.CHART.build(train, 10)
+            self.CHART.build(train, args.label_min_freq)
             self.POS.build(train)
             torch.save(self.fields, args.fields)
         else:

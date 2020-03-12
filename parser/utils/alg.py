@@ -182,7 +182,7 @@ def cky(scores, transitions, start_transitions, mask):
 
 def simple_cky(scores, mask):
     lens = mask[:, 0].sum(-1)
-    scores = scores.sum(-1)
+    scores, _ = scores.max(-1)
     scores = scores.permute(1, 2, 0)
     seq_len, seq_len, batch_size = scores.shape
     s = scores.new_zeros(seq_len, seq_len, batch_size)
