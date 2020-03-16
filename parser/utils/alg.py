@@ -60,10 +60,17 @@ def crf(scores, transitions, start_transitions, mask, target=None, marg=False):
     # marginal probs are used for decoding, and can be computed by
     # combining the inside algorithm and autograd mechanism
     # instead of the entire inside-outside process
+    # probs = (scores, transitions, start_transitions)
     probs = scores
     if marg:
-        probs, = autograd.grad(
-            logZ, scores, retain_graph=scores.requires_grad)
+        emit_prob, = autograd.grad(
+            logZ, scores)
+        # trans_prob, = autograd.grad(
+            # logZ, transitions, retain_graph=scores.requires_grad)
+        # start_prob, = autograd.grad(
+            # logZ, start_transitions, retain_graph=scores.requires_grad)
+        # probs = (emit_prob, trans_prob, start_prob)
+        probs = emit_prob
     if target is None:
         return None, probs
     s = inside(scores.requires_grad_(), transitions,
@@ -183,6 +190,7 @@ def cky(scores, transitions, start_transitions, mask):
 def simple_cky(scores, mask):
     lens = mask[:, 0].sum(-1)
     scores, _ = scores.max(-1)
+    # scores = scores.sum(-1)
     scores = scores.permute(1, 2, 0)
     seq_len, seq_len, batch_size = scores.shape
     s = scores.new_zeros(seq_len, seq_len, batch_size)

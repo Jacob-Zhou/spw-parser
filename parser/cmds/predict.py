@@ -38,6 +38,10 @@ class Predict(CMD):
         print("Load the model")
         self.model = Model.load(args.model)
         self.dp_model = self.model
+        # from pprint import pprint
+        # import torch
+        # pprint(torch.cuda.memory_snapshot())
+        # exit()
         print(f"{self.model}\n")
 
         print("Make predictions on the dataset")

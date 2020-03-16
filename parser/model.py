@@ -169,17 +169,37 @@ class Model(nn.Module):
         # [batch_size, seq_len, seq_len, 4]
         s_span = self.span_attn(span_l, span_r).permute(0, 2, 3, 1)
         loss, s_span = self.crf(s_span, mask, target)
-        # [batch_size, seq_len, seq_len, n_labels]
-        s_label = self.label_attn(label_l, label_r).permute(0, 2, 3, 1)
-        # s_label = s_label + self.cluster_bias(s_span.detach())
-        s_label = s_label + \
-            self.cluster_bias(target.float() if self.training else s_span)
+        if self.training:
+            # [batch_size, seq_len, seq_len, n_labels]
+            target_sparse = feed_dict.get("target_sparse", None)
+            if target_sparse is None:
+                target_sparse = target.to_sparse(3)
+            s_label = self.label_attn(label_l, label_r, target_sparse)
+            b_idx, x_idx, y_idx = target_sparse.indices()
+            target = target[b_idx, x_idx, y_idx].float()
+            # noise = target.new_empty(target.shape).normal_(mean=0.33)
+            # mask = target.new_empty(target.shape[:-1]).bernoulli_(1 - 0.33).unsqueeze(-1)
+            # emit_prob = target * mask + noise
+            # cluster_prob = emit_prob / (emit_prob.sum(-1, keepdim=True) + torch.finfo(torch.float).eps)
+            cluster_prob = target
+            mask = s_label.new_empty(s_label.shape[:-1]).bernoulli_(1 - 0.33).unsqueeze(-1)
+            cluster_bias = self.cluster_bias(cluster_prob) * mask
+        else:
+            # [batch_size, seq_len, seq_len, n_labels]
+            s_label = self.label_attn(label_l, label_r).permute(0, 2, 3, 1)
+            # emit_prob, trans_prob, start_prob = s_span
+            emit_prob = s_span
+            cluster_prob = emit_prob / (emit_prob.sum(-1, keepdim=True) + torch.finfo(torch.float).eps)
+            cluster_bias = self.cluster_bias(cluster_prob)
+        s_label = s_label + cluster_bias
+        # TODO dropout cluster_bias
         # heatmap(self.cluster_bias.weight.t().detach().cpu(), "cluster_bias")
 
         return s_span, s_label, loss.view(1) if loss is not None else None
 
     def decode(self, s_span, s_label, mask):
         pred_spans = simple_cky(s_span, mask)
+        # pred_spans = self.crf.cky(s_span, mask)
         pred_labels = s_label.argmax(-1).tolist()
         preds = [[(i, j, labels[i][j]) for i, j in spans]
                  for spans, labels in zip(pred_spans, pred_labels)]

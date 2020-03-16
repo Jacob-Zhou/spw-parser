@@ -156,10 +156,13 @@ class CMD(object):
             mask = mask & mask.new_ones(seq_len-1, seq_len-1).triu_(1)
             span_mask = spans.gt(0)
             spans = torch.nn.functional.one_hot(spans, 5).bool()[..., 1:]
-            feed_dict.update({"target": spans, "mask": mask})
-            s_span, s_label, span_loss = self.dp_model(feed_dict)
-            span_mask = span_mask & mask
-            label_loss = self.criterion(s_label[span_mask], labels[span_mask])
+            # print(f"{labels.shape=}")
+            labels_sparse = labels.to_sparse(3)
+            feed_dict.update({"target": spans, "target_sparse": labels_sparse, "mask": mask})
+            _, s_label, span_loss = self.dp_model(feed_dict)
+            # span_mask = span_mask & mask
+            # label_loss = self.criterion(s_label[span_mask], labels[span_mask])
+            label_loss = self.criterion(s_label, labels_sparse.values())
             loss = (span_loss.mean() + label_loss) / self.args.update_steps
             loss.backward()
             if (i + 1) % self.args.update_steps == 0 or i == len(loader):
@@ -198,11 +201,11 @@ class CMD(object):
             span_mask = spans.gt(0)
             spans = torch.nn.functional.one_hot(spans, 5).bool()[..., 1:]
             feed_dict.update({"target": spans, "mask": mask})
-            s_span, s_label, span_loss = self.dp_model(feed_dict)
+            probs, s_label, span_loss = self.dp_model(feed_dict)
             span_mask = span_mask & mask
             loss = span_loss.mean() + \
                 self.criterion(s_label[span_mask], labels[span_mask])
-            preds = self.model.decode(s_span, s_label, mask)
+            preds = self.model.decode(probs, s_label, mask)
             preds = [build(tree,
                            [(i, j, self.CHART.vocab.itos[label])
                             for i, j, label in pred])
@@ -240,8 +243,8 @@ class CMD(object):
             mask = lens.new_tensor(range(seq_len - 1)) < lens.view(-1, 1, 1)
             mask = mask & mask.new_ones(seq_len-1, seq_len-1).triu_(1)
             feed_dict.update({"mask": mask})
-            s_span, s_label, _ = self.dp_model(feed_dict)
-            preds = self.model.decode(s_span, s_label, mask)
+            probs, s_label, _ = self.dp_model(feed_dict)
+            preds = self.model.decode(probs, s_label, mask)
             preds = [build(tree,
                            [(i, j, self.CHART.vocab.itos[label])
                             for i, j, label in pred])

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 
 import unicodedata
+import torch
 
 from nltk.tree import Tree
 

@@ -30,14 +30,24 @@ class Biaffine(nn.Module):
     def reset_parameters(self):
         nn.init.zeros_(self.weight)
 
-    def forward(self, x, y):
+    def forward(self, x, y, target=None):
         if self.bias_x:
             x = torch.cat((x, torch.ones_like(x[..., :1])), -1)
         if self.bias_y:
             y = torch.cat((y, torch.ones_like(y[..., :1])), -1)
-        # [batch_size, n_out, seq_len, seq_len]
-        s = torch.einsum('bxi,oij,byj->boxy', x, self.weight, y)
+        if target is None or not self.training:
+            # [batch_size, n_out, seq_len, seq_len]
+            s = torch.einsum('bxi,oij,byj->boxy', x, self.weight, y)
+        else:
+            # [batch_size, seq_len, seq_len, n_labels] (sparse)
+            if not target.is_sparse:
+                target = target.to_sparse(3)
+            b_idx, x_idx, y_idx = target.indices()
+            # [*, n_in]
+            x = x[b_idx, x_idx]
+            y = y[b_idx, y_idx]
+            # [batch_size, n_out, seq_len, seq_len]
+            s = torch.einsum('ni,oij,nj->no', x, self.weight, y)
         # remove dim 1 if n_out == 1
         s = s.squeeze(1)
-
         return s
