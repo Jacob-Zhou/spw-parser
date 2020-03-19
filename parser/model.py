@@ -183,8 +183,8 @@ class Model(nn.Module):
             b_idx, x_idx, y_idx = target_sparse.indices()
             target = target[b_idx, x_idx, y_idx].float()
             cluster_prob = target
-            mask = cluster_prob.new_empty(cluster_prob.shape[0]).bernoulli_(1 - 0.33)
-            cluster_prob = cluster_prob * mask.unsqueeze(-1)
+            # mask = cluster_prob.new_empty(cluster_prob.shape[0]).bernoulli_(1 - 0.33)
+            # cluster_prob = cluster_prob * mask.unsqueeze(-1)
             cluster_prob = self.cluster_bias(cluster_prob)
         else:
             # [batch_size, seq_len, seq_len, n_labels]
