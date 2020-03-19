@@ -60,17 +60,15 @@ def crf(scores, transitions, start_transitions, mask, target=None, marg=False):
     # marginal probs are used for decoding, and can be computed by
     # combining the inside algorithm and autograd mechanism
     # instead of the entire inside-outside process
-    # probs = (scores, transitions, start_transitions)
-    probs = scores
+    probs = (None, scores, transitions, start_transitions)
+    # probs = scores
     if marg:
         emit_prob, = autograd.grad(
-            logZ, scores)
-        # trans_prob, = autograd.grad(
-            # logZ, transitions, retain_graph=scores.requires_grad)
-        # start_prob, = autograd.grad(
-            # logZ, start_transitions, retain_graph=scores.requires_grad)
-        # probs = (emit_prob, trans_prob, start_prob)
-        probs = emit_prob
+            logZ, scores, retain_graph=True)
+        # trans_prob = transitions.exp() / (transitions.exp().sum() + torch.finfo(torch.float).eps)
+        # start_prob = start_transitions.softmax(-1)
+        # probs = (emit_prob, emit_prob, trans_prob, start_prob)
+        probs = (emit_prob, scores, transitions, start_transitions)
     if target is None:
         return None, probs
     s = inside(scores.requires_grad_(), transitions,
@@ -131,45 +129,43 @@ def cky(scores, transitions, start_transitions, mask):
     batch_size, seq_len, seq_len, n_labels = scores.shape
     # [seq_len, seq_len, n_labels, batch_size]
     scores = scores.permute(1, 2, 3, 0)
+    # [seq_len, syyeq_len, n_labels, batch_size]
+    mask = mask.permute(1, 2, 0)
     s = torch.zeros_like(scores)
     bp = scores.new_zeros(seq_len, seq_len, n_labels, batch_size, 3).long()
 
-    start_transitions = start_transitions.view(n_labels, 1, 1)
+    start_transitions = start_transitions.view(1, 1, n_labels)
     transitions = transitions.view(1, 1,
-                                   n_labels, n_labels, n_labels,
-                                   1)
+                                   n_labels, n_labels, n_labels)
 
     for w in range(1, seq_len):
         n = seq_len - w
-        starts = bp.new_tensor(range(n)).unsqueeze(0)
-        # [n_labels, batch_size, n]
-        emit_scores = scores.diagonal(w)
+        starts = bp.new_tensor(range(n)).view(1, n, 1)
 
+        emit_scores = scores.diagonal(w).permute(1, 2, 0)
+        diag_s = s.diagonal(w).permute(1, 2, 0)
+        diag_bp = bp.diagonal(w).permute(1, 3, 0, 2)
         if w == 1:
-            # [n_labels, batch_size, n]
-            s.diagonal(w).copy_(emit_scores + start_transitions)
+            diag_s.copy_(emit_scores + start_transitions)
             continue
-        # [n, w-1, n_labels, n_labels, n_labels, batch_size]
-        emit_scores = emit_scores.permute(2, 0, 1).contiguous().view(n, 1,
-                                                                     1, 1, n_labels,
-                                                                     batch_size)
-        s_left = stripe(s, n, w-1, (0, 1)).view(n, w-1,
-                                                n_labels, 1, 1,
-                                                batch_size)
-        s_right = stripe(s, n, w-1, (1, w), 0).view(n, w-1,
-                                                    1, n_labels, 1,
-                                                    batch_size)
+
+        # [batch_size, n, w-1, n_labels, n_labels, n_labels]
+        emit_scores = emit_scores.contiguous().view(batch_size, n, 1, 1, 1, n_labels)
+        s_left = stripe(s, n, w-1, (0, 1)).permute(3, 0, 1, 2).contiguous()
+        s_left = s_left.view(batch_size,
+                             n, w-1,
+                             n_labels, 1, 1)
+        s_right = stripe(s, n, w-1, (1, w), 0).permute(3, 0, 1, 2).contiguous()
+        s_right = s_right.view(batch_size,
+                               n, w-1,
+                               1, n_labels, 1)
+        # [batch_size, n, w-1, n_labels, n_labels, n_labels]
         inner = s_left + s_right + transitions + emit_scores
-        # [n_labels, batch_size, n, w-1, n_labels, n_labels]
-        inner = inner.permute(4, 5, 0, 1, 2, 3)
-        # [n_labels, batch_size, n]
-        inner, idx = multi_dim_max(inner, [3, 4, 5])
+        # [batch_size, n, n_labels]
+        inner, idx = multi_dim_max(inner, [2, 3, 4])
         idx[..., 0] = idx[..., 0] + starts + 1
-        # [n_labels, batch_size, n, 3]
-        idx = idx.permute(0, 1, 3, 2)
-        s.diagonal(w).copy_(inner)
-        # [n_labels, batch_size, 3, n]
-        bp.diagonal(w).copy_(idx)
+        diag_s.copy_(inner)
+        diag_bp.copy_(idx)
 
     def backtrack(bp, label, i, j):
         if j == i + 1:
@@ -189,8 +185,7 @@ def cky(scores, transitions, start_transitions, mask):
 
 def simple_cky(scores, mask):
     lens = mask[:, 0].sum(-1)
-    scores, _ = scores.max(-1)
-    # scores = scores.sum(-1)
+    scores, l = scores.max(-1)
     scores = scores.permute(1, 2, 0)
     seq_len, seq_len, batch_size = scores.shape
     s = scores.new_zeros(seq_len, seq_len, batch_size)
@@ -212,16 +207,17 @@ def simple_cky(scores, mask):
         s.diagonal(w).copy_(s_span + scores.diagonal(w))
         p.diagonal(w).copy_(p_span + starts + 1)
 
-    def backtrack(p, i, j):
+    def backtrack(p, l, i, j):
         if j == i + 1:
-            return [(i, j)]
+            return [(i, j, l[i][j])]
         split = p[i][j]
-        ltree = backtrack(p, i, split)
-        rtree = backtrack(p, split, j)
-        return [(i, j)] + ltree + rtree
+        ltree = backtrack(p, l, i, split)
+        rtree = backtrack(p, l, split, j)
+        return [(i, j, l[i][j])] + ltree + rtree
 
     p = p.permute(2, 0, 1).tolist()
-    trees = [backtrack(p[i], 0, length)
+    l = l.tolist()
+    trees = [backtrack(p[i], l[i], 0, length)
              for i, length in enumerate(lens.tolist())]
 
     return trees
@@ -249,5 +245,3 @@ def heatmap(corr, name='matrix'):
     plt.savefig(f'{name}.png')
     plt.close()
 
-    # heatmap(s_span[0].cpu().detach(),
-    #     torch.ones(seq_len-1,seq_len-1).triu_(1).eq(0))

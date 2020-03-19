@@ -205,7 +205,7 @@ class CMD(object):
             span_mask = span_mask & mask
             loss = span_loss.mean() + \
                 self.criterion(s_label[span_mask], labels[span_mask])
-            preds = self.model.decode(probs, s_label, mask)
+            preds = self.model.decode(probs, s_label, mask, self.args.marg)
             preds = [build(tree,
                            [(i, j, self.CHART.vocab.itos[label])
                             for i, j, label in pred])
@@ -244,7 +244,7 @@ class CMD(object):
             mask = mask & mask.new_ones(seq_len-1, seq_len-1).triu_(1)
             feed_dict.update({"mask": mask})
             probs, s_label, _ = self.dp_model(feed_dict)
-            preds = self.model.decode(probs, s_label, mask)
+            preds = self.model.decode(probs, s_label, mask, self.args.marg)
             preds = [build(tree,
                            [(i, j, self.CHART.vocab.itos[label])
                             for i, j, label in pred])

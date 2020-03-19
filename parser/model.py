@@ -69,6 +69,11 @@ class Model(nn.Module):
                                    bias_y=True)
 
         self.crf = TreeCRFLoss(4, True)
+        # self.cluster_bias = nn.Bilinear(
+            # in1_features=4,
+            # in2_features=args.n_labels,
+            # out_features=args.n_labels,
+            # bias=False)
         self.cluster_bias = nn.Linear(
             in_features=4,
             out_features=args.n_labels,
@@ -178,25 +183,31 @@ class Model(nn.Module):
             b_idx, x_idx, y_idx = target_sparse.indices()
             target = target[b_idx, x_idx, y_idx].float()
             cluster_prob = target
-            # mask = s_label.new_empty(s_label.shape[:-1]).bernoulli_(1 - 0.33).unsqueeze(-1)
-            # cluster_bias = self.cluster_bias(cluster_prob) * mask
+            mask = cluster_prob.new_empty(cluster_prob.shape[0]).bernoulli_(1 - 0.33)
+            cluster_prob = cluster_prob * mask.unsqueeze(-1)
+            cluster_prob = self.cluster_bias(cluster_prob)
         else:
             # [batch_size, seq_len, seq_len, n_labels]
-            s_label = self.label_attn(label_l, label_r).permute(0, 2, 3, 1)
+            s_label = self.label_attn(label_l, label_r).permute(0, 2, 3, 1).contiguous()
             # emit_prob, trans_prob, start_prob = s_span
-            emit_prob = s_span
+            emit_prob = s_span[0]
+            emit_prob = emit_prob.contiguous()
+            # emit_prob = s_span.contiguous()
             cluster_prob = emit_prob / (emit_prob.sum(-1, keepdim=True) + torch.finfo(torch.float).eps)
-        cluster_bias = self.cluster_bias(cluster_prob)
-        s_label = s_label + cluster_bias
+            cluster_prob = self.cluster_bias(cluster_prob)
+        s_label = s_label + cluster_prob
+        # s_label = self.cluster_bias(cluster_prob, s_label)
         # heatmap(self.cluster_bias.weight.t().detach().cpu(), "cluster_bias")
 
         return s_span, s_label, loss.view(1) if loss is not None else None
 
-    def decode(self, s_span, s_label, mask):
-        pred_spans = simple_cky(s_span, mask)
-        # pred_spans = self.crf.cky(s_span, mask)
+    def decode(self, s_span, s_label, mask, marg=True):
+        if marg:
+            pred_spans = simple_cky(s_span[0], mask)
+        else:
+            pred_spans = self.crf.cky(s_span, mask)
         pred_labels = s_label.argmax(-1).tolist()
-        preds = [[(i, j, labels[i][j]) for i, j in spans]
+        preds = [[(i, j, labels[i][j]) for i, j, l in spans]
                  for spans, labels in zip(pred_spans, pred_labels)]
 
         return preds
