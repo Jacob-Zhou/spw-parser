@@ -74,10 +74,10 @@ class Model(nn.Module):
             # in2_features=args.n_labels,
             # out_features=args.n_labels,
             # bias=False)
-        self.cluster_bias = nn.Linear(
-            in_features=4,
-            out_features=args.n_labels,
-            bias=False)
+        # self.cluster_bias = nn.Linear(
+            # in_features=4,
+            # out_features=args.n_labels,
+            # bias=False)
         self.pad_index = args.pad_index
         self.unk_index = args.unk_index
 
@@ -180,35 +180,41 @@ class Model(nn.Module):
             if target_sparse is None:
                 target_sparse = target.to_sparse(3)
             s_label = self.label_attn(label_l, label_r, target_sparse)
-            b_idx, x_idx, y_idx = target_sparse.indices()
-            target = target[b_idx, x_idx, y_idx].float()
-            cluster_prob = target
+            # b_idx, x_idx, y_idx = target_sparse.indices()
+            # target = target[b_idx, x_idx, y_idx].float()
+            # cluster_prob = target
             # mask = cluster_prob.new_empty(cluster_prob.shape[0]).bernoulli_(1 - 0.33)
             # cluster_prob = cluster_prob * mask.unsqueeze(-1)
-            cluster_prob = self.cluster_bias(cluster_prob)
+            # cluster_prob = self.cluster_bias(cluster_prob)
         else:
             # [batch_size, seq_len, seq_len, n_labels]
             s_label = self.label_attn(label_l, label_r).permute(0, 2, 3, 1).contiguous()
             # emit_prob, trans_prob, start_prob = s_span
-            emit_prob = s_span[0]
-            emit_prob = emit_prob.contiguous()
+            # emit_prob = s_span[0]
+            # emit_prob = emit_prob.contiguous()
             # emit_prob = s_span.contiguous()
-            cluster_prob = emit_prob / (emit_prob.sum(-1, keepdim=True) + torch.finfo(torch.float).eps)
-            cluster_prob = self.cluster_bias(cluster_prob)
-        s_label = s_label + cluster_prob
+            # cluster_prob = emit_prob / (emit_prob.sum(-1, keepdim=True) + torch.finfo(torch.float).eps)
+            # cluster_prob = self.cluster_bias(cluster_prob)
+        # s_label = s_label + cluster_prob
         # s_label = self.cluster_bias(cluster_prob, s_label)
         # heatmap(self.cluster_bias.weight.t().detach().cpu(), "cluster_bias")
 
         return s_span, s_label, loss.view(1) if loss is not None else None
 
-    def decode(self, s_span, s_label, mask, marg=True):
+    def decode(self, s_span, s_label, mask, marg=True, corase=None):
         if marg:
             pred_spans = simple_cky(s_span[0], mask)
         else:
             pred_spans = self.crf.cky(s_span, mask)
-        pred_labels = s_label.argmax(-1).tolist()
-        preds = [[(i, j, labels[i][j]) for i, j, l in spans]
-                 for spans, labels in zip(pred_spans, pred_labels)]
+        if corase is None:
+            pred_labels = s_label.argmax(-1).tolist()
+            preds = [[(i, j, labels[i][j]) for i, j, l in spans]
+                     for spans, labels in zip(pred_spans, pred_labels)]
+        else:
+            bz, lens, _, lsize = s_label.shape
+            # pred_labels = (s_label.view(bz, lens, lens, lsize, 1) + corase.view(1, 1, 1, lsize, 4)).argmax(-2).tolist()
+            preds = [[(i, j, (labels[i, j] + corase[:, l]).argmax()) for i, j, l in spans]
+                     for spans, labels in zip(pred_spans, s_label)]
 
         return preds
 

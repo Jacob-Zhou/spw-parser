@@ -222,6 +222,7 @@ class CMD(object):
     @torch.no_grad()
     def predict(self, loader):
         self.dp_model.eval()
+        coarse_mask = torch.nn.functional.one_hot(torch.tensor([self.CHART.label_cluster(label) - 1 for label in self.CHART.vocab.itos]), 4).float().log()
 
         all_trees = []
         for data in loader:
@@ -244,6 +245,7 @@ class CMD(object):
             mask = mask & mask.new_ones(seq_len-1, seq_len-1).triu_(1)
             feed_dict.update({"mask": mask})
             probs, s_label, _ = self.dp_model(feed_dict)
+            # preds = self.model.decode(probs, s_label, mask, self.args.marg, coarse_mask.to(device=chars.device))
             preds = self.model.decode(probs, s_label, mask, self.args.marg)
             preds = [build(tree,
                            [(i, j, self.CHART.vocab.itos[label])
